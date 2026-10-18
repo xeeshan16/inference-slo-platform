@@ -4,21 +4,28 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
+      - uses: hashicorp/setup-terraform@v3
+        with: { terraform_version: 1.13.4, terraform_wrapper: false }
       - run: |
-          for t in terraform kind kubectl helm k6 docker python3; do echo "$t: $(command -v $t) $($t version 2>/dev/null | head -1 || true)"; done
-          nproc; free -g
-          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-          helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts
-          helm repo add grafana https://grafana.github.io/helm-charts
-          helm repo update
-          helm search repo prometheus-community/kube-prometheus-stack -l | head -8
-          helm search repo open-telemetry/opentelemetry-collector -l | head -8
-          helm search repo grafana/tempo -l | head -8
-          for p in tehcyx/kind hashicorp/helm hashicorp/kubernetes hashicorp/aws; do echo "$p"; curl -s https://registry.terraform.io/v1/providers/$p/versions | jq -r '.versions[].version' | sort -V | tail -4; done
-          curl -s https://registry.terraform.io/v1/modules/terraform-aws-modules/eks/aws/versions | jq -r '.modules[0].versions[].version' | sort -V | tail -3
-          curl -s https://registry.terraform.io/v1/modules/terraform-aws-modules/vpc/aws/versions | jq -r '.modules[0].versions[].version' | sort -V | tail -3
-          curl -s https://api.github.com/repos/hashicorp/terraform/releases/latest | jq -r .tag_name
-          curl -s https://api.github.com/repos/grafana/k6/releases/latest | jq -r .tag_name
-          curl -s https://api.github.com/repos/kubernetes-sigs/kind/releases/latest | jq -r '.tag_name, .body' | grep -E 'kindest/node:v1\.3[0-9]' | head -5
-          helm show chart prometheus-community/kube-prometheus-stack | grep -E '^(version|appVersion)'
-          helm show values open-telemetry/opentelemetry-collector | grep -A3 -E '^image:' 
+          helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/ >/dev/null && helm repo update >/dev/null
+          helm search repo metrics-server/metrics-server -l | head -3
+          for i in python:3.12.12-slim-bookworm python:3.12-slim-bookworm grafana/k6:2.3.0 grafana/k6:1.3.0 otel/opentelemetry-collector-contrib:0.162.0; do echo "$i $(docker manifest inspect $i >/dev/null 2>&1 && echo OK || echo MISSING)"; done
+          curl -s 'https://hub.docker.com/v2/repositories/library/python/tags?page_size=100&name=3.12.' | jq -r '.results[].name' | grep -E '^3\.12\.[0-9]+-slim' | sort -V | tail -4
+          mkdir t && cd t && cat > main.tf <<'TF'
+          terraform {
+            required_providers {
+              kind = { source = "tehcyx/kind", version = "0.11.0" }
+              helm = { source = "hashicorp/helm", version = "3.3.0" }
+              kubernetes = { source = "hashicorp/kubernetes", version = "3.3.0" }
+            }
+          }
+          TF
+          terraform init -no-color >/dev/null
+          terraform providers schema -json > s.json
+          jq -c '.provider_schemas["registry.terraform.io/tehcyx/kind"].resource_schemas.kind_cluster.block | {a: (.attributes|keys), b: (.block_types|keys)}' s.json
+          jq -c '.provider_schemas["registry.terraform.io/tehcyx/kind"].resource_schemas.kind_cluster.block.block_types.kind_config.block | {a: (.attributes|keys), b: (.block_types|keys)}' s.json
+          jq -c '.provider_schemas["registry.terraform.io/tehcyx/kind"].resource_schemas.kind_cluster.block.block_types.kind_config.block.block_types.node.block | {a: (.attributes|keys), b: (.block_types|keys)}' s.json
+          jq -c '.provider_schemas["registry.terraform.io/hashicorp/helm"].provider | {a: (.block.attributes|keys), b: (.block.block_types|keys)}' s.json
+          jq -c '.provider_schemas["registry.terraform.io/hashicorp/helm"].provider.block.attributes.kubernetes' s.json | head -c 1500; echo
+          jq -c '.provider_schemas["registry.terraform.io/hashicorp/helm"].resource_schemas.helm_release.block | {a: (.attributes|keys), b: (.block_types|keys)}' s.json
+          jq -c '.provider_schemas["registry.terraform.io/hashicorp/kubernetes"].resource_schemas | keys' s.json | tr ',' '\n' | grep -E 'namespace|config_map|"kubernetes_manifest' 
