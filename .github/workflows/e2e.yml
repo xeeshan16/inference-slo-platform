@@ -1,0 +1,121 @@
+name: e2e
+
+# Provision the whole platform on a kind cluster with Terraform, deploy the
+# service, run the k6 scenarios in-cluster, export SLO results, tear down.
+on:
+  push:
+    branches: [main, dev]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+  workflow_dispatch:
+    inputs:
+      scenarios:
+        description: "Space-separated k6 scenarios (steady ramp spike rollout)"
+        default: "steady ramp spike rollout"
+      rate:
+        description: "Steady / base arrival rate (req/s)"
+        default: "150"
+      peak:
+        description: "Peak arrival rate for ramp and spike (req/s)"
+        default: "450"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TERRAFORM_VERSION: 1.16.6
+  CLUSTER_NAME: inference-slo
+  SCENARIOS: ${{ inputs.scenarios || 'steady ramp spike rollout' }}
+  RATE: ${{ inputs.rate || '150' }}
+  PEAK: ${{ inputs.peak || '450' }}
+  TF_IN_AUTOMATION: "1"
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: runner info
+        run: |
+          nproc; free -g; kind version; kubectl version --client; helm version --short
+
+      - name: build image
+        run: |
+          echo "IMAGE_TAG=${GITHUB_SHA::12}" >> "$GITHUB_ENV"
+          docker build -t "inference-service:${GITHUB_SHA::12}" service
+
+      - name: terraform apply (kind cluster, platform, app)
+        working-directory: terraform/environments/local
+        run: |
+          terraform init -input=false
+          terraform apply -auto-approve -input=false \
+            -var "cluster_name=${CLUSTER_NAME}" -var "image_tag=${IMAGE_TAG}"
+
+      - name: cluster status
+        run: |
+          kind export kubeconfig --name "$CLUSTER_NAME"
+          kubectl get nodes -o wide
+          kubectl -n inference rollout status deploy/inference-service --timeout=180s
+          kubectl get pods -A -o wide
+          kubectl -n inference get deploy,hpa,pdb,networkpolicy
+
+      - name: smoke test (through the Service, from the loadtest namespace)
+        run: scripts/smoke.sh
+
+      - name: wait for metrics pipeline (SDK -> Collector -> Prometheus)
+        run: scripts/wait_for_metrics.sh
+
+      - name: load tests
+        run: |
+          mkdir -p results/run
+          for s in $SCENARIOS; do
+            echo "::group::scenario $s"
+            scripts/wait_for_baseline.sh
+            scripts/loadtest.sh "$s" results/run
+            echo "::endgroup::"
+          done
+
+      - name: summary
+        if: always()
+        run: |
+          if ls results/run/*.json >/dev/null 2>&1; then
+            python3 scripts/summarize_results.py results/run | tee results/run/SUMMARY.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: diagnostics
+        if: always()
+        run: |
+          mkdir -p results/run/diagnostics
+          d=results/run/diagnostics
+          kubectl get pods -A -o wide > $d/pods.txt 2>&1 || true
+          kubectl -n inference describe hpa > $d/hpa.txt 2>&1 || true
+          kubectl -n inference get events --sort-by=.lastTimestamp > $d/inference-events.txt 2>&1 || true
+          kubectl -n inference logs -l app.kubernetes.io/name=inference-service --tail=200 --prefix > $d/inference-logs.txt 2>&1 || true
+          kubectl -n observability logs deploy/otel-collector --tail=200 > $d/otel-collector.txt 2>&1 || true
+          kubectl -n monitoring get prometheusrules -o name > $d/prometheusrules.txt 2>&1 || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-results-${{ github.run_id }}
+          path: results/run
+          if-no-files-found: warn
+
+      - name: terraform destroy
+        if: always()
+        working-directory: terraform/environments/local
+        run: |
+          terraform destroy -auto-approve -input=false \
+            -var "cluster_name=${CLUSTER_NAME}" -var "image_tag=${IMAGE_TAG:-none}" || kind delete cluster --name "$CLUSTER_NAME"

@@ -1,0 +1,87 @@
+fullnameOverride: kps
+
+%{ if disable_control_plane_scrapes ~}
+# Control-plane components are not scrapeable on kind / managed control planes;
+# leaving them on only produces permanently firing TargetDown alerts.
+kubeEtcd:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
+%{ endif ~}
+
+prometheus:
+  prometheusSpec:
+    scrapeInterval: 15s
+    evaluationInterval: 15s
+    retention: ${retention}
+    # Pick up PrometheusRules / ServiceMonitors from every release, not just this one.
+    ruleSelectorNilUsesHelmValues: false
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        memory: 2Gi
+    additionalScrapeConfigs:
+      # Application metrics arrive via OTLP at the Collector, which exposes them
+      # in Prometheus format. honor_labels keeps job/instance as set by the
+      # Collector (service.name / service.instance.id) instead of the scrape target.
+      - job_name: otel-collector-app-metrics
+        honor_labels: true
+        scrape_interval: 15s
+        static_configs:
+          - targets: ["${otel_collector_target}:8889"]
+      - job_name: otel-collector-internal
+        scrape_interval: 15s
+        static_configs:
+          - targets: ["${otel_collector_target}:8888"]
+
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 20m
+        memory: 64Mi
+      limits:
+        memory: 128Mi
+
+grafana:
+  fullnameOverride: grafana
+  defaultDashboardsTimezone: utc
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: ALL
+  additionalDataSources:
+    - name: Tempo
+      type: tempo
+      uid: tempo
+      access: proxy
+      url: ${tempo_url}
+      jsonData:
+        serviceMap:
+          datasourceUid: prometheus
+        nodeGraph:
+          enabled: true
+
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi

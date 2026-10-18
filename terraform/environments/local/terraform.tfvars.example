@@ -1,0 +1,4 @@
+cluster_name = "inference-slo"
+worker_count = 2
+image_tag    = "dev"
+# app_values_files = ["../../../charts/inference-service/values-experiment.yaml"]

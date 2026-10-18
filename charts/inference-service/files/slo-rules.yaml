@@ -1,0 +1,167 @@
+# SLO: 99% of POST /predict requests succeed (non-5xx) in <= 300 ms, rolling 28 days.
+# SLI (error ratio) = 1 - good / total
+#   good  = requests with status != 5xx and latency <= 0.3s (histogram bucket le="0.3")
+#   total = all /predict requests (4xx are client errors and count as good if fast)
+# Burn-rate alerts follow the multi-window, multi-burn-rate pattern from the
+# Google SRE Workbook (ch. 5): 14.4x over 1h & 5m, 6x over 6h & 30m, 1x over 3d & 6h.
+# This file is plain Prometheus rule format so `promtool test rules` can test it;
+# the Helm chart wraps it in a PrometheusRule.
+groups:
+  - name: inference-slo-sli
+    interval: 30s
+    rules:
+      - record: slo:sli_error:ratio_rate5m
+        expr: |
+          1 - (
+            sum(rate(inference_request_duration_seconds_bucket{route="/predict",le="0.3",status_code!~"5.."}[5m]))
+            /
+            sum(rate(inference_request_duration_seconds_count{route="/predict"}[5m]))
+          )
+        labels:
+          slo: inference-predict
+      - record: slo:sli_error:ratio_rate30m
+        expr: |
+          1 - (
+            sum(rate(inference_request_duration_seconds_bucket{route="/predict",le="0.3",status_code!~"5.."}[30m]))
+            /
+            sum(rate(inference_request_duration_seconds_count{route="/predict"}[30m]))
+          )
+        labels:
+          slo: inference-predict
+      - record: slo:sli_error:ratio_rate1h
+        expr: |
+          1 - (
+            sum(rate(inference_request_duration_seconds_bucket{route="/predict",le="0.3",status_code!~"5.."}[1h]))
+            /
+            sum(rate(inference_request_duration_seconds_count{route="/predict"}[1h]))
+          )
+        labels:
+          slo: inference-predict
+      - record: slo:sli_error:ratio_rate2h
+        expr: |
+          1 - (
+            sum(rate(inference_request_duration_seconds_bucket{route="/predict",le="0.3",status_code!~"5.."}[2h]))
+            /
+            sum(rate(inference_request_duration_seconds_count{route="/predict"}[2h]))
+          )
+        labels:
+          slo: inference-predict
+      - record: slo:sli_error:ratio_rate6h
+        expr: |
+          1 - (
+            sum(rate(inference_request_duration_seconds_bucket{route="/predict",le="0.3",status_code!~"5.."}[6h]))
+            /
+            sum(rate(inference_request_duration_seconds_count{route="/predict"}[6h]))
+          )
+        labels:
+          slo: inference-predict
+      - record: slo:sli_error:ratio_rate1d
+        expr: |
+          1 - (
+            sum(rate(inference_request_duration_seconds_bucket{route="/predict",le="0.3",status_code!~"5.."}[1d]))
+            /
+            sum(rate(inference_request_duration_seconds_count{route="/predict"}[1d]))
+          )
+        labels:
+          slo: inference-predict
+      - record: slo:sli_error:ratio_rate3d
+        expr: |
+          1 - (
+            sum(rate(inference_request_duration_seconds_bucket{route="/predict",le="0.3",status_code!~"5.."}[3d]))
+            /
+            sum(rate(inference_request_duration_seconds_count{route="/predict"}[3d]))
+          )
+        labels:
+          slo: inference-predict
+      - record: slo:sli_error:ratio_rate28d
+        expr: |
+          1 - (
+            sum(rate(inference_request_duration_seconds_bucket{route="/predict",le="0.3",status_code!~"5.."}[28d]))
+            /
+            sum(rate(inference_request_duration_seconds_count{route="/predict"}[28d]))
+          )
+        labels:
+          slo: inference-predict
+      - record: slo:objective:ratio
+        expr: vector(0.99)
+        labels:
+          slo: inference-predict
+      - record: slo:burn_rate:5m
+        expr: slo:sli_error:ratio_rate5m{slo="inference-predict"} / (1 - 0.99)
+      - record: slo:burn_rate:30m
+        expr: slo:sli_error:ratio_rate30m{slo="inference-predict"} / (1 - 0.99)
+      - record: slo:burn_rate:1h
+        expr: slo:sli_error:ratio_rate1h{slo="inference-predict"} / (1 - 0.99)
+      - record: slo:burn_rate:2h
+        expr: slo:sli_error:ratio_rate2h{slo="inference-predict"} / (1 - 0.99)
+      - record: slo:burn_rate:6h
+        expr: slo:sli_error:ratio_rate6h{slo="inference-predict"} / (1 - 0.99)
+      - record: slo:burn_rate:1d
+        expr: slo:sli_error:ratio_rate1d{slo="inference-predict"} / (1 - 0.99)
+      - record: slo:burn_rate:3d
+        expr: slo:sli_error:ratio_rate3d{slo="inference-predict"} / (1 - 0.99)
+      - record: slo:burn_rate:28d
+        expr: slo:sli_error:ratio_rate28d{slo="inference-predict"} / (1 - 0.99)
+      - record: slo:error_budget_remaining:ratio
+        expr: 1 - slo:burn_rate:28d
+        labels:
+          slo: inference-predict
+      - record: slo:requests:rate5m
+        expr: sum(rate(inference_request_duration_seconds_count{route="/predict"}[5m]))
+        labels:
+          slo: inference-predict
+
+  - name: inference-slo-alerts
+    rules:
+      - alert: InferenceSLOBurnRateCritical
+        expr: |
+          slo:sli_error:ratio_rate1h{slo="inference-predict"} > (14.4 * 0.01)
+          and
+          slo:sli_error:ratio_rate5m{slo="inference-predict"} > (14.4 * 0.01)
+        for: 2m
+        labels:
+          severity: page
+          slo: inference-predict
+          window: 1h/5m
+        annotations:
+          summary: "/predict is burning error budget at >=14.4x (2% of the 28d budget per hour)"
+          description: "1h error ratio {{ $value | humanizePercentage }}. At this rate the whole 28-day budget is gone in under 2 days."
+          runbook_url: "https://github.com/xeeshan16/inference-slo-platform/blob/main/docs/runbook.md#inferencesloburnratecritical"
+      - alert: InferenceSLOBurnRateHigh
+        expr: |
+          slo:sli_error:ratio_rate6h{slo="inference-predict"} > (6 * 0.01)
+          and
+          slo:sli_error:ratio_rate30m{slo="inference-predict"} > (6 * 0.01)
+        for: 5m
+        labels:
+          severity: page
+          slo: inference-predict
+          window: 6h/30m
+        annotations:
+          summary: "/predict is burning error budget at >=6x (5% of the 28d budget per 6h)"
+          description: "6h error ratio {{ $value | humanizePercentage }}."
+          runbook_url: "https://github.com/xeeshan16/inference-slo-platform/blob/main/docs/runbook.md#inferencesloburnratehigh"
+      - alert: InferenceSLOBurnRateLow
+        expr: |
+          slo:sli_error:ratio_rate3d{slo="inference-predict"} > (1 * 0.01)
+          and
+          slo:sli_error:ratio_rate6h{slo="inference-predict"} > (1 * 0.01)
+        for: 30m
+        labels:
+          severity: ticket
+          slo: inference-predict
+          window: 3d/6h
+        annotations:
+          summary: "/predict is consuming error budget faster than it accrues (>=1x over 3d)"
+          description: "3d error ratio {{ $value | humanizePercentage }}. The budget will run out before the 28-day window ends."
+          runbook_url: "https://github.com/xeeshan16/inference-slo-platform/blob/main/docs/runbook.md#inferencesloburnratelow"
+      - alert: InferenceSLONoTraffic
+        expr: absent(inference_request_duration_seconds_count{route="/predict"})
+        for: 10m
+        labels:
+          severity: ticket
+          slo: inference-predict
+        annotations:
+          summary: "No /predict metrics: the SLI cannot be computed"
+          description: "Either the service is down, nobody is calling it, or the metrics pipeline (SDK -> Collector -> Prometheus) is broken."
+          runbook_url: "https://github.com/xeeshan16/inference-slo-platform/blob/main/docs/runbook.md#inferenceslonotraffic"

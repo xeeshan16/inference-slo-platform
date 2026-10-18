@@ -1,0 +1,9 @@
+{{- if .Values.slo.rulesEnabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "inference.name" . }}-slo
+  labels: {{- include "inference.labels" . | nindent 4 }}
+spec:
+{{ .Files.Get "files/slo-rules.yaml" | indent 2 }}
+{{- end }}

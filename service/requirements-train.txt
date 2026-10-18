@@ -1,0 +1,4 @@
+# Build-time only: used to train and export the model inside the Docker builder stage.
+scikit-learn==1.9.1
+skl2onnx==1.20.0
+onnx==1.23.2

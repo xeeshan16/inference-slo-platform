@@ -1,0 +1,121 @@
+# Unit tests for files/slo-rules.yaml. Run: promtool test rules tests-promtool/slo-rules.test.yaml
+rule_files:
+  - ../files/slo-rules.yaml
+evaluation_interval: 30s
+
+tests:
+  # 1. Healthy: 10 rps, 0.5% of requests slow -> burn rate 0.5x, no alerts.
+  - interval: 1m
+    input_series:
+      - series: 'inference_request_duration_seconds_count{route="/predict",status_code="200"}'
+        values: '0+600x400'
+      - series: 'inference_request_duration_seconds_bucket{route="/predict",status_code="200",le="0.3"}'
+        values: '0+597x400'
+    promql_expr_test:
+      - expr: round(slo:sli_error:ratio_rate1h, 0.0001)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{slo="inference-predict"}'
+            value: 0.005
+      - expr: round(slo:burn_rate:1h, 0.0001)
+        eval_time: 2h
+        exp_samples:
+          - labels: '{slo="inference-predict"}'
+            value: 0.5
+    alert_rule_test:
+      - alertname: InferenceSLOBurnRateCritical
+        eval_time: 6h
+        exp_alerts: []
+      - alertname: InferenceSLOBurnRateHigh
+        eval_time: 6h
+        exp_alerts: []
+
+  # 2. Outage: 20% of requests return 5xx (fast) -> 20x burn -> critical page.
+  - interval: 1m
+    input_series:
+      - series: 'inference_request_duration_seconds_count{route="/predict",status_code="200"}'
+        values: '0+480x120'
+      - series: 'inference_request_duration_seconds_bucket{route="/predict",status_code="200",le="0.3"}'
+        values: '0+480x120'
+      - series: 'inference_request_duration_seconds_count{route="/predict",status_code="503"}'
+        values: '0+120x120'
+      - series: 'inference_request_duration_seconds_bucket{route="/predict",status_code="503",le="0.3"}'
+        values: '0+120x120'
+    promql_expr_test:
+      - expr: round(slo:sli_error:ratio_rate5m, 0.0001)
+        eval_time: 30m
+        exp_samples:
+          - labels: '{slo="inference-predict"}'
+            value: 0.2
+    alert_rule_test:
+      # Both the 1h and 5m windows exceed 14.4x after a few minutes; `for: 2m` then fires.
+      - alertname: InferenceSLOBurnRateCritical
+        eval_time: 15m
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: inference-predict
+              window: 1h/5m
+            exp_annotations:
+              summary: "/predict is burning error budget at >=14.4x (2% of the 28d budget per hour)"
+              description: "1h error ratio 20%. At this rate the whole 28-day budget is gone in under 2 days."
+              runbook_url: "https://github.com/xeeshan16/inference-slo-platform/blob/main/docs/runbook.md#inferencesloburnratecritical"
+
+  # 3. Slow degradation: 8% of requests slower than 300 ms -> 8x burn.
+  #    Above the 6x threshold but below 14.4x: only the 6h/30m alert fires.
+  - interval: 1m
+    input_series:
+      - series: 'inference_request_duration_seconds_count{route="/predict",status_code="200"}'
+        values: '0+1000x480'
+      - series: 'inference_request_duration_seconds_bucket{route="/predict",status_code="200",le="0.3"}'
+        values: '0+920x480'
+    alert_rule_test:
+      - alertname: InferenceSLOBurnRateCritical
+        eval_time: 7h
+        exp_alerts: []
+      - alertname: InferenceSLOBurnRateHigh
+        eval_time: 7h
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              slo: inference-predict
+              window: 6h/30m
+            exp_annotations:
+              summary: "/predict is burning error budget at >=6x (5% of the 28d budget per 6h)"
+              description: "6h error ratio 8%."
+              runbook_url: "https://github.com/xeeshan16/inference-slo-platform/blob/main/docs/runbook.md#inferencesloburnratehigh"
+
+  # 4. A short blip (10 minutes at 50% slow, then healthy) must not page: the
+  #    1h ratio peaks around 8% (< 14.4%) and the 6h ratio stays far below 6%.
+  #    This is the "reset time / precision" property of multi-window alerts.
+  - interval: 1m
+    input_series:
+      - series: 'inference_request_duration_seconds_count{route="/predict",status_code="200"}'
+        values: '0+600x120'
+      - series: 'inference_request_duration_seconds_bucket{route="/predict",status_code="200",le="0.3"}'
+        values: '0+600x60 36300+300x10 39300+600x50'
+    alert_rule_test:
+      - alertname: InferenceSLOBurnRateCritical
+        eval_time: 100m
+        exp_alerts: []
+      - alertname: InferenceSLOBurnRateHigh
+        eval_time: 100m
+        exp_alerts: []
+
+  # 5. No traffic at all -> the SLI is undefined and the no-traffic alert fires.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="otel-collector"}'
+        values: '1x20'
+    alert_rule_test:
+      - alertname: InferenceSLONoTraffic
+        eval_time: 15m
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              slo: inference-predict
+              route: /predict
+            exp_annotations:
+              summary: "No /predict metrics: the SLI cannot be computed"
+              description: "Either the service is down, nobody is calling it, or the metrics pipeline (SDK -> Collector -> Prometheus) is broken."
+              runbook_url: "https://github.com/xeeshan16/inference-slo-platform/blob/main/docs/runbook.md#inferenceslonotraffic"

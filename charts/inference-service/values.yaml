@@ -1,0 +1,69 @@
+image:
+  repository: inference-service
+  tag: "1.0.0"
+  # Images are side-loaded into kind with `kind load docker-image`, never pulled.
+  pullPolicy: IfNotPresent
+
+replicaCount: 2
+
+service:
+  port: 8080
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# Seconds the container sleeps in preStop before receiving SIGTERM, giving
+# kube-proxy / endpoints time to stop routing new requests to it. 0 disables the hook.
+preStopSleepSeconds: 0
+terminationGracePeriodSeconds: 30
+
+probes:
+  readiness:
+    path: /readyz
+    periodSeconds: 5
+    timeoutSeconds: 1
+    failureThreshold: 3
+  liveness:
+    path: /healthz
+    periodSeconds: 10
+    timeoutSeconds: 1
+    failureThreshold: 3
+  startup:
+    path: /healthz
+    periodSeconds: 2
+    failureThreshold: 30
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+networkPolicy:
+  enabled: true
+  # Namespaces allowed to call the service on its HTTP port.
+  ingressNamespaces: [loadtest, monitoring]
+  # Namespace running the OpenTelemetry Collector (OTLP egress).
+  otelNamespace: observability
+
+env:
+  maxBatchSize: 32
+  logLevel: INFO
+
+otel:
+  endpoint: http://otel-collector.observability.svc.cluster.local:4318
+  traceSampleRatio: "0.1"
+  metricExportIntervalMs: 10000
+
+slo:
+  # Installs the PrometheusRule (recording rules + burn-rate alerts) from files/slo-rules.yaml.
+  rulesEnabled: true

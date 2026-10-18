@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+service/model/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+*-config
+terraform.tfvars
+!terraform.tfvars.example
+
+# Load-test output (curated results live in docs/results/)
+results/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
