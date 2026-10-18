@@ -31,14 +31,15 @@ spec:
             - { name: PEAK, value: "${PEAK}" }
             - { name: DURATION, value: "${DURATION}" }
             - { name: BATCH, value: "${BATCH}" }
+            - { name: MAX_VUS, value: "${MAX_VUS}" }
             - { name: K6_NO_USAGE_REPORT, value: "true" }
           resources:
             requests:
               cpu: 500m
               memory: 256Mi
             limits:
-              cpu: "1"
-              memory: 1Gi
+              cpu: "2"
+              memory: 2Gi
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

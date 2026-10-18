@@ -86,7 +86,7 @@ jobs:
           done
       - name: k6 job manifest
         run: |
-          SCENARIO=steady RATE=1 PEAK=1 DURATION=1s BATCH=1 RUN_ID=check envsubst < loadtest/job.yaml.tpl \
+          SCENARIO=steady RATE=1 PEAK=1 DURATION=1s BATCH=1 MAX_VUS=1 RUN_ID=check envsubst < loadtest/job.yaml.tpl \
             | kubeconform -strict -summary
       - name: dashboard JSON
         run: |

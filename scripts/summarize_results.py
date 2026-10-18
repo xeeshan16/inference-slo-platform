@@ -51,6 +51,7 @@ def main() -> int:
                     f"{load} rps",
                     fmt(server.get("requests"), "int"),
                     fmt(server.get("sli"), "pct"),
+                    fmt(client.get("sli"), "pct"),
                     fmt(server.get("burn_rate_over_window"), "x"),
                     fmt(server.get("max_burn_rate_5m"), "x"),
                     fmt(server.get("errors_5xx"), "int"),
@@ -60,6 +61,7 @@ def main() -> int:
                     fmt(lat.get("p95"), "ms"),
                     fmt(lat.get("p99"), "ms"),
                     fmt(client.get("failed_ratio"), "pct"),
+                    fmt(client.get("sli_bad", {}).get("transport"), "int"),
                     fmt(client.get("dropped_iterations"), "int"),
                     fmt(server.get("cpu_throttled_ratio"), "pct"),
                     f"{fmt(server.get('replicas_min'), 'int')}-{fmt(server.get('replicas_max'), 'int')}",
@@ -69,17 +71,18 @@ def main() -> int:
             + " |"
         )
     header = (
-        "| scenario | load | requests (server) | SLI | burn (window) | max burn 5m | 5xx "
-        "| p50 ms | p95 ms | p99 ms | k6 p95 ms | k6 p99 ms | k6 failed | k6 dropped "
+        "| scenario | load | requests (server) | SLI (server) | SLI (k6) | burn (window) | max burn 5m | 5xx "
+        "| p50 ms | p95 ms | p99 ms | k6 p95 ms | k6 p99 ms | k6 failed | k6 transport errors | k6 dropped "
         "| CPU throttled | replicas | restarts |\n"
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"
     )
     print(header)
     print("\n".join(rows))
     print(
         "\nServer-side columns come from Prometheus (OTel histogram, buckets interpolated);"
         " k6 columns are measured by the client. SLI = share of /predict requests that are"
-        " non-5xx and <= 300 ms."
+        " non-5xx and <= 300 ms. SLI (k6) applies the same rule on the client and also counts"
+        " requests that never got an HTTP response (transport errors)."
     )
     return 0
 

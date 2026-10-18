@@ -11,6 +11,7 @@
 // dropped iterations instead of being hidden by a closed loop.
 import http from 'k6/http';
 import { check } from 'k6';
+import { Counter } from 'k6/metrics';
 
 const TARGET = __ENV.TARGET_URL || 'http://inference-service.inference.svc.cluster.local:8080';
 const SCENARIO = __ENV.SCENARIO || 'steady';
@@ -18,9 +19,9 @@ const RATE = parseInt(__ENV.RATE || '100', 10);
 const PEAK = parseInt(__ENV.PEAK || '400', 10);
 const DURATION = __ENV.DURATION || '4m';
 const BATCH = parseInt(__ENV.BATCH || '8', 10);
-const MAX_VUS = parseInt(__ENV.MAX_VUS || '600', 10);
+const MAX_VUS = parseInt(__ENV.MAX_VUS || '1500', 10);
 
-const common = { preAllocatedVUs: 100, maxVUs: MAX_VUS, timeUnit: '1s', exec: 'predict' };
+const common = { preAllocatedVUs: 200, maxVUs: MAX_VUS, timeUnit: '1s', exec: 'predict' };
 
 const scenarios = {
   steady: {
@@ -81,9 +82,26 @@ function makePayload() {
 const PAYLOADS = Array.from({ length: 50 }, makePayload);
 const PARAMS = { headers: { 'Content-Type': 'application/json' }, timeout: '10s', tags: { name: 'predict' } };
 
+// Client-side view of the SLI. The server can only count requests it saw; a
+// connection refused or reset during a rollout never reaches its histogram.
+const sliGood = new Counter('sli_good');            // 2xx/4xx and <= 300 ms
+const sliSlow = new Counter('sli_bad_slow');        // answered, but > 300 ms
+const sli5xx = new Counter('sli_bad_5xx');          // server answered 5xx
+const sliConn = new Counter('sli_bad_transport');   // no HTTP response (refused, reset, timeout)
+const SLO_THRESHOLD_MS = 300;
+
 export function predict() {
   const res = http.post(`${TARGET}/predict`, PAYLOADS[Math.floor(Math.random() * PAYLOADS.length)], PARAMS);
   check(res, { 'status is 200': (r) => r.status === 200 });
+  if (res.status === 0) {
+    sliConn.add(1, { error_code: String(res.error_code) });
+  } else if (res.status >= 500) {
+    sli5xx.add(1);
+  } else if (res.timings.duration > SLO_THRESHOLD_MS) {
+    sliSlow.add(1);
+  } else {
+    sliGood.add(1);
+  }
 }
 
 // Emit the machine-readable summary between markers so the runner script can

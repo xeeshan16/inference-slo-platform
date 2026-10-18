@@ -10,7 +10,7 @@ set -euo pipefail
 SCENARIO="${1:?usage: loadtest.sh <steady|ramp|spike|rollout> [results_dir]}"
 RESULTS_DIR="${2:-results/local}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-export RATE="${RATE:-100}" PEAK="${PEAK:-400}" DURATION="${DURATION:-4m}" BATCH="${BATCH:-8}"
+export RATE="${RATE:-100}" PEAK="${PEAK:-400}" DURATION="${DURATION:-4m}" BATCH="${BATCH:-8}" MAX_VUS="${MAX_VUS:-1500}"
 ROLLOUT_AFTER="${ROLLOUT_AFTER:-60}"
 SETTLE="${SETTLE:-60}"   # OTel export (10s) + scrape (15s) + rule evaluation, with margin
 PROM_PORT="${PROM_PORT:-9090}"

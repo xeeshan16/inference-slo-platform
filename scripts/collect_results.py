@@ -59,7 +59,16 @@ def k6_metrics(summary: dict[str, Any]) -> dict[str, Any]:
         return None if raw is None else float(raw)
 
     duration = "http_req_duration"
+    good = val("sli_good", "count") or 0.0
+    bad = {
+        "slow": val("sli_bad_slow", "count") or 0.0,
+        "5xx": val("sli_bad_5xx", "count") or 0.0,
+        "transport": val("sli_bad_transport", "count") or 0.0,
+    }
+    total = good + sum(bad.values())
     return {
+        "sli": (good / total) if total else None,
+        "sli_bad": bad,
         "requests": val("http_reqs", "count"),
         "rps": val("http_reqs", "rate"),
         "failed_ratio": val("http_req_failed", "rate"),

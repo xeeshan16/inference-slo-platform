@@ -19,12 +19,17 @@ on:
       peak:
         description: "Peak arrival rate for ramp and spike (req/s)"
         default: "450"
+      batch:
+        description: "Images per /predict request"
+        default: "8"
 
 permissions:
   contents: read
 
+# Pushes to a branch queue behind each other; manual dispatches (experiments
+# with different inputs) get their own runner and run in parallel.
 concurrency:
-  group: e2e-${{ github.ref }}
+  group: e2e-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || 'push' }}
   cancel-in-progress: false
 
 env:
@@ -33,6 +38,7 @@ env:
   SCENARIOS: ${{ inputs.scenarios || 'steady ramp spike rollout' }}
   RATE: ${{ inputs.rate || '150' }}
   PEAK: ${{ inputs.peak || '450' }}
+  BATCH: ${{ inputs.batch || '8' }}
   TF_IN_AUTOMATION: "1"
 
 jobs:
@@ -91,7 +97,7 @@ jobs:
         if: always()
         run: |
           if ls results/run/*.json >/dev/null 2>&1; then
-            python3 scripts/summarize_results.py results/run | tee results/run/SUMMARY.md >> "$GITHUB_STEP_SUMMARY"
+            python3 scripts/summarize_results.py results/run | tee results/run/SUMMARY.md | tee -a "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: diagnostics
@@ -119,3 +125,18 @@ jobs:
         run: |
           terraform destroy -auto-approve -input=false \
             -var "cluster_name=${CLUSTER_NAME}" -var "image_tag=${IMAGE_TAG:-none}" || kind delete cluster --name "$CLUSTER_NAME"
+
+      # Last step on purpose: the tail of the job log carries every measured
+      # result, so a run's numbers can be read from its log alone.
+      - name: results
+        if: always()
+        run: |
+          for f in results/run/*.json; do
+            case "$f" in *.k6.json|*.meta.json) continue ;; esac
+            echo "RESULT_JSON $(jq -c . "$f")"
+          done
+          for f in results/run/*.events.txt; do
+            [ -f "$f" ] || continue
+            echo "::group::$f"; grep -vE 'Pulled|Created|Started' "$f" | tail -40; echo "::endgroup::"
+          done
+          cat results/run/SUMMARY.md 2>/dev/null || true
