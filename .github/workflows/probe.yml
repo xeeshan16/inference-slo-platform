@@ -1,0 +1,24 @@
+name: probe
+on: [push, workflow_dispatch]
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          for t in terraform kind kubectl helm k6 docker python3; do echo "$t: $(command -v $t) $($t version 2>/dev/null | head -1 || true)"; done
+          nproc; free -g
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts
+          helm repo add grafana https://grafana.github.io/helm-charts
+          helm repo update
+          helm search repo prometheus-community/kube-prometheus-stack -l | head -8
+          helm search repo open-telemetry/opentelemetry-collector -l | head -8
+          helm search repo grafana/tempo -l | head -8
+          for p in tehcyx/kind hashicorp/helm hashicorp/kubernetes hashicorp/aws; do echo "$p"; curl -s https://registry.terraform.io/v1/providers/$p/versions | jq -r '.versions[].version' | sort -V | tail -4; done
+          curl -s https://registry.terraform.io/v1/modules/terraform-aws-modules/eks/aws/versions | jq -r '.modules[0].versions[].version' | sort -V | tail -3
+          curl -s https://registry.terraform.io/v1/modules/terraform-aws-modules/vpc/aws/versions | jq -r '.modules[0].versions[].version' | sort -V | tail -3
+          curl -s https://api.github.com/repos/hashicorp/terraform/releases/latest | jq -r .tag_name
+          curl -s https://api.github.com/repos/grafana/k6/releases/latest | jq -r .tag_name
+          curl -s https://api.github.com/repos/kubernetes-sigs/kind/releases/latest | jq -r '.tag_name, .body' | grep -E 'kindest/node:v1\.3[0-9]' | head -5
+          helm show chart prometheus-community/kube-prometheus-stack | grep -E '^(version|appVersion)'
+          helm show values open-telemetry/opentelemetry-collector | grep -A3 -E '^image:' 
